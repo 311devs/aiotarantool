@@ -5,6 +5,8 @@ __version__ = "1.1.5"
 import asyncio
 import socket
 import errno
+from logging import warning
+
 import msgpack
 import base64
 
@@ -33,6 +35,7 @@ from tarantool.utils import check_key
 from tarantool.error import (
     NetworkError,
     DatabaseError,
+    NetworkWarning,
     SchemaReloadException)
 
 from tarantool.const import (
@@ -279,10 +282,23 @@ class Connection(tarantool.Connection):
 
     async def _send_request(self, request):
         assert isinstance(request, Request)
+        connected = True
+        attempt = 1
+        while True:
+            try:
+                if not connected:
+                    await self.connect()
+                    connected = True
+                    warning('Successfully reconnected', NetworkWarning)
 
-        if not self.connected:
-            await self.connect()
-        return (await self._send_request_no_check_connected(request))
+                return await self._send_request_no_check_connected(request)
+            except (NetworkError, ConnectionRefusedError) as e:
+                if attempt > self.reconnect_max_attempts:
+                    raise
+                warning(f'{e} : Reconnect attempt {attempt} of {self.reconnect_max_attempts}', NetworkWarning)
+                await asyncio.sleep(self.reconnect_delay)
+                attempt += 1
+                connected = False
 
     async def _send_request_no_check_connected(self, request):
         while True:
@@ -320,17 +336,8 @@ class Connection(tarantool.Connection):
             self.connected = False
             self._writer.transport.close()
             self._reader_task.cancel()
-            self._reader_task = None
 
             self._writer_task.cancel()
-            self._writer_task = None
-            self._write_event = None
-            self._write_buf = None
-
-            self._writer = None
-            self._reader = None
-
-            self._greeting_event = None
 
             for waiter in self._waiters.values():
                 if exc is None:
