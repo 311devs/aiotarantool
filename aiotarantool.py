@@ -295,7 +295,7 @@ class Connection(tarantool.Connection):
             except (NetworkError, ConnectionRefusedError) as e:
                 if attempt > self.reconnect_max_attempts:
                     raise
-                warning(f'{e} : Reconnect attempt {attempt} of {self.reconnect_max_attempts}', NetworkWarning)
+                warning(f'{str(e)} : Reconnect attempt {attempt} of {self.reconnect_max_attempts}', NetworkWarning)
                 await asyncio.sleep(self.reconnect_delay)
                 attempt += 1
                 connected = False
