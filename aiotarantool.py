@@ -5,7 +5,6 @@ __version__ = "1.1.5"
 import asyncio
 import socket
 import errno
-from logging import warning
 
 import msgpack
 import base64
@@ -286,16 +285,14 @@ class Connection(tarantool.Connection):
         attempt = 1
         while True:
             try:
-                if not connected:
+                if not self.connected or not connected:
                     await self.connect()
                     connected = True
-                    warning('Successfully reconnected', NetworkWarning)
 
                 return await self._send_request_no_check_connected(request)
             except (NetworkError, ConnectionRefusedError) as e:
                 if attempt > self.reconnect_max_attempts:
                     raise
-                warning(f'{e} : Reconnect attempt {attempt} of {self.reconnect_max_attempts}', NetworkWarning)
                 await asyncio.sleep(self.reconnect_delay)
                 attempt += 1
                 connected = False
