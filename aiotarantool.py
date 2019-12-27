@@ -286,11 +286,11 @@ class Connection(tarantool.Connection):
             if not self.connected:
                 await self.connect()
             cor = self._send_request_no_check_connected(request)
-            return await asyncio.wait_for(cor, timeout=self.connection_timeout)
+            return await asyncio.wait_for(cor, timeout=self.socket_timeout)
         except (NetworkError, ConnectionRefusedError):
             await self.connect()
             cor = self._send_request_no_check_connected(request)
-            return await asyncio.wait_for(cor, timeout=self.connection_timeout)
+            return await asyncio.wait_for(cor, timeout=self.socket_timeout)
 
     async def _send_request_no_check_connected(self, request):
         while True:
