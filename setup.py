@@ -29,7 +29,7 @@ setup(
         "Topic :: Database :: Front-Ends"
     ],
     install_requires=[
-        "tarantool>=0.5.1",
+        "tarantool>=0.6.6.1",
     ],
     description="Tarantool connection driver for work with asyncio",
     long_description=open("README.rst").read()
