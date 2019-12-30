@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = "1.1.5.2"
+__version__ = "1.1.5.3"
 
 import asyncio
 import socket
@@ -181,7 +181,8 @@ class Connection(tarantool.Connection):
 
     async def _do_connect(self):
         logger.log(logging.DEBUG, "connecting to %r" % self)
-        self._reader, self._writer = await asyncio.open_connection(self.host, self.port, loop=self.loop)
+        cor = asyncio.open_connection(self.host, self.port, loop=self.loop)
+        self._reader, self._writer = await asyncio.wait_for(cor, timeout=self.connection_timeout)
 
         self._reader_task = self.loop.create_task(self._response_reader())
         self._writer_task = self.loop.create_task(self._response_writer())
@@ -281,21 +282,15 @@ class Connection(tarantool.Connection):
 
     async def _send_request(self, request):
         assert isinstance(request, Request)
-        connected = True
-        attempt = 1
-        while True:
-            try:
-                if not self.connected or not connected:
-                    await self.connect()
-                    connected = True
-
-                return await self._send_request_no_check_connected(request)
-            except (NetworkError, ConnectionRefusedError) as e:
-                if attempt > self.reconnect_max_attempts:
-                    raise
-                await asyncio.sleep(self.reconnect_delay)
-                attempt += 1
-                connected = False
+        try:
+            if not self.connected:
+                await self.connect()
+            cor = self._send_request_no_check_connected(request)
+            return await asyncio.wait_for(cor, timeout=self.socket_timeout)
+        except (NetworkError, ConnectionRefusedError):
+            await self.connect()
+            cor = self._send_request_no_check_connected(request)
+            return await asyncio.wait_for(cor, timeout=self.socket_timeout)
 
     async def _send_request_no_check_connected(self, request):
         while True:
