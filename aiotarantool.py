@@ -203,76 +203,78 @@ class Connection(tarantool.Connection):
                 to_write = self._write_buf
                 self._write_buf = b""
                 self._writer.write(to_write)
+                await self._writer.drain()
 
             self._write_event.clear()
 
     async def _response_reader(self):
-        # handshake
-        greeting = await self._reader.read(IPROTO_GREETING_SIZE)
-        self._salt = base64.decodestring(greeting[64:])[:20]
-        self._greeting_event.set()
+        try:
+            # handshake
+            greeting = await self._reader.read(IPROTO_GREETING_SIZE)
+            self._salt = base64.decodestring(greeting[64:])[:20]
+            self._greeting_event.set()
 
-        buf = b""
-        while not self._reader.at_eof():
-            tmp_buf = await self._reader.read(self.aiobuffer_size)
-            if not tmp_buf:
-                await self._do_close(
-                    NetworkError(socket.error(errno.ECONNRESET, "Lost connection to server during query")))
+            buf = b""
+            while not self._reader.at_eof():
+                tmp_buf = await self._reader.read(self.aiobuffer_size)
+                if not tmp_buf:
+                    await self._do_close(
+                        NetworkError(socket.error(errno.ECONNRESET, "Lost connection to server during query")))
 
-            buf += tmp_buf
-            len_buf = len(buf)
-            curr = 0
+                buf += tmp_buf
+                len_buf = len(buf)
+                curr = 0
 
-            while len_buf - curr >= 5:
-                length_pack = buf[curr:curr + 5]
-                length = msgpack.unpackb(length_pack)
+                while len_buf - curr >= 5:
+                    length_pack = buf[curr:curr + 5]
+                    length = msgpack.unpackb(length_pack)
 
-                if len_buf - curr < 5 + length:
-                    break
+                    if len_buf - curr < 5 + length:
+                        break
 
-                body = buf[curr + 5:curr + 5 + length]
-                curr += 5 + length
-                try:
-                    response = Response(self, body)  # unpack response
-                except SchemaReloadException as exp:
-                    if self.encoding is not None:
-                        unpacker = msgpack.Unpacker(use_list=True, encoding=self.encoding)
-                    else:
-                        unpacker = msgpack.Unpacker(use_list=True)
-                    
-                    unpacker.feed(body)
-                    header = unpacker.unpack()
-                    sync = header.get(IPROTO_SYNC, 0)
+                    body = buf[curr + 5:curr + 5 + length]
+                    curr += 5 + length
+                    try:
+                        response = Response(self, body)  # unpack response
+                    except SchemaReloadException as exp:
+                        if self.encoding is not None:
+                            unpacker = msgpack.Unpacker(use_list=True, encoding=self.encoding)
+                        else:
+                            unpacker = msgpack.Unpacker(use_list=True)
+
+                        unpacker.feed(body)
+                        header = unpacker.unpack()
+                        sync = header.get(IPROTO_SYNC, 0)
+
+                        waiter = self._waiters[sync]
+                        if not waiter.cancelled():
+                            waiter.set_exception(exp)
+
+                        del self._waiters[sync]
+
+                        self.schema.flush()
+                        self.schema_version = exp.schema_version
+                        continue
+
+                    sync = response.sync
+                    if sync not in self._waiters:
+                        logger.error("aio git happens: {r}", response)
+                        continue
 
                     waiter = self._waiters[sync]
                     if not waiter.cancelled():
-                        waiter.set_exception(exp)
+                        if response.return_code != 0:
+                            waiter.set_exception(DatabaseError(response.return_code, response.return_message))
+                        else:
+                            waiter.set_result(response)
 
                     del self._waiters[sync]
-                    
-                    self.schema.flush()
-                    self.schema_version = exp.schema_version
-                    continue
 
-                sync = response.sync
-                if sync not in self._waiters:
-                    logger.error("aio git happens: {r}", response)
-                    continue
-
-                waiter = self._waiters[sync]
-                if not waiter.cancelled():
-                    if response.return_code != 0:
-                        waiter.set_exception(DatabaseError(response.return_code, response.return_message))
-                    else:
-                        waiter.set_result(response)
-
-                del self._waiters[sync]
-
-            # one cut for buffer
-            if curr:
-                buf = buf[curr:]
-
-        await self._do_close(None)
+                # one cut for buffer
+                if curr:
+                    buf = buf[curr:]
+        finally:
+            await self._do_close(None)
 
     async def _wait_response(self, sync):
         resp = await self._waiters[sync]
