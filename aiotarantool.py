@@ -203,10 +203,17 @@ class Connection(tarantool.Connection):
                 to_write = self._write_buf
                 self._write_buf = b""
                 self._writer.write(to_write)
+                await self._writer.drain()
 
             self._write_event.clear()
 
     async def _response_reader(self):
+        try:
+            await self.__response_reader()
+        finally:
+            await self._do_close(None)
+
+    async def __response_reader(self):
         # handshake
         greeting = await self._reader.read(IPROTO_GREETING_SIZE)
         self._salt = base64.decodestring(greeting[64:])[:20]
@@ -239,7 +246,7 @@ class Connection(tarantool.Connection):
                         unpacker = msgpack.Unpacker(use_list=True, encoding=self.encoding)
                     else:
                         unpacker = msgpack.Unpacker(use_list=True)
-                    
+
                     unpacker.feed(body)
                     header = unpacker.unpack()
                     sync = header.get(IPROTO_SYNC, 0)
@@ -249,7 +256,7 @@ class Connection(tarantool.Connection):
                         waiter.set_exception(exp)
 
                     del self._waiters[sync]
-                    
+
                     self.schema.flush()
                     self.schema_version = exp.schema_version
                     continue
@@ -271,8 +278,6 @@ class Connection(tarantool.Connection):
             # one cut for buffer
             if curr:
                 buf = buf[curr:]
-
-        await self._do_close(None)
 
     async def _wait_response(self, sync):
         resp = await self._waiters[sync]
